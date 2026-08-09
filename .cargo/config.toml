@@ -1,0 +1,5 @@
+[alias]
+survey = "run --profile profiler --features hotpath-cpu"
+survey-alloc = "run --profile profiler --features profiler"
+survey-plain = "run --profile profiler --no-default-features"
+product = "run --profile product"

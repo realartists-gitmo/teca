@@ -1,0 +1,58 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "teca"
+version = "0.1.0"
+edition = "2024"
+description = "Token-Efficient Content Addressing"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# The instrumentation macros are no-ops when these features are disabled.
+hotpath = ["hotpath/hotpath"]
+hotpath-cpu = ["hotpath", "hotpath/hotpath-cpu"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+profiler = ["hotpath-cpu", "hotpath-alloc"]
+
+[dependencies]
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+hotpath = { version = "0.16.1", default-features = false }
+mimalloc = "0.1"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.release]
+rustflags = ["-Z", "threads=0"]
+incremental = true
+split-debuginfo = "unpacked"
+
+[profile.profiler]
+inherits = "release"
+opt-level = 3
+overflow-checks = false
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+strip = false
+
+[profile.product]
+inherits = "release"
+opt-level = 3
+incremental = false
+overflow-checks = false
+strip = true
+lto = "fat"
+codegen-units = 1
+rustflags = ["-C", "target-cpu=native", "-Z", "tune-cpu=native"]
+
+# Release codegen with full debug symbols for external profilers. Keeping this
+# separate prevents profiling runs from invalidating ordinary release builds.
+[profile.release-debug]
+inherits = "release"
+debug = true
