@@ -14,7 +14,9 @@ The finalized lexicon was built from one-token vocabulary strings from these rep
 - [zai-org/GLM-5.2](https://huggingface.co/zai-org/GLM-5.2), `tokenizer.json`.
 - [google/gemma-3-1b-pt](https://huggingface.co/google/gemma-3-1b-pt), `tokenizer.json`.
 
-Tokenizer names, model names, and upstream licenses belong to their respective owners.
+Tokenizer names, model names, and upstream licenses belong to their respective owners. This repository does not redistribute model weights or the upstream tokenizer files; the canonical lexicon contains only ordinary strings selected from their vocabulary behavior.
+
+For the Gemma proxy, Google’s terms are available at <https://ai.google.dev/gemma/terms>. Gemma is provided under and subject to the Gemma Terms of Use found at that URL.
 
 ## CTM source
 
