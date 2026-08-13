@@ -15,6 +15,7 @@ use crate::codec::ContentCodecDescriptor;
 use crate::fallback::FallbackDescriptor;
 use crate::field::standardff::StandardFieldDescriptor;
 use crate::lexicon::{Lexicon, LexiconError};
+use crate::neighborhood::{Neighborhood, NeighborhoodRow};
 use crate::prior::{
     PriorArtifact, PriorMetadata, PriorTransform, ProvenanceRecord, Scenario, SymbolSpace,
     WeightExpr,
@@ -25,6 +26,7 @@ use crate::scheme::{DecisionNode, Scheme, SchemeError};
 const SCHEME_MAGIC_V2: &[u8; 8] = b"TECASM02";
 const PRIOR_MAGIC_V2: &[u8; 8] = b"TECAPR02";
 const LEXICON_MAGIC_V2: &[u8; 8] = b"TECALX02";
+const NEIGHBORHOOD_MAGIC_V1: &[u8; 8] = b"TECANB01";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CookObjectiveDescriptor {
@@ -84,6 +86,7 @@ pub enum ArtifactError {
     InvalidField,
     InvalidPrior(&'static str),
     UnsupportedFallbackForFormat(&'static str),
+    InvalidNeighborhood(&'static str),
 }
 
 impl fmt::Display for ArtifactError {
@@ -104,6 +107,9 @@ impl fmt::Display for ArtifactError {
             Self::InvalidPrior(msg) => write!(f, "invalid prior artifact: {msg}"),
             Self::UnsupportedFallbackForFormat(msg) => {
                 write!(f, "unsupported fallback for artifact format: {msg}")
+            }
+            Self::InvalidNeighborhood(msg) => {
+                write!(f, "invalid neighborhood artifact: {msg}")
             }
         }
     }
@@ -295,6 +301,114 @@ pub fn decode_lexicon(bytes: &[u8]) -> Result<LexiconArtifact, ArtifactError> {
     };
     validate_lexicon_artifact(&artifact)?;
     Ok(artifact)
+}
+
+/// Canonical byte-stable serialization of a `Neighborhood`.
+///
+/// The artifact is self-contained: it carries the scheme payload plus every
+/// canonical row in lexicographic input-byte order, including each stored
+/// canonical address. Two neighborhoods with the same scheme, contents, and
+/// identifiers encode to identical bytes regardless of mutation history or
+/// insertion order.
+pub fn encode_neighborhood(neighborhood: &Neighborhood) -> Result<Vec<u8>, ArtifactError> {
+    neighborhood.validate().map_err(|_| {
+        ArtifactError::InvalidNeighborhood("neighborhood fails canonical validation")
+    })?;
+    let mut out = Vec::new();
+    out.extend_from_slice(NEIGHBORHOOD_MAGIC_V1);
+    put_scheme_payload(&mut out, neighborhood.scheme())?;
+    put_count(&mut out, neighborhood.len())?;
+    for entry in neighborhood.entries() {
+        put_bytes(&mut out, entry.bytes())?;
+        match entry.identifier() {
+            None => out.push(0),
+            Some(id) => {
+                out.push(1);
+                put_bytes(&mut out, id)?;
+            }
+        }
+        put_count(&mut out, entry.address().len())?;
+        for atom in entry.address().atoms() {
+            put_u32(&mut out, atom.get());
+        }
+    }
+    Ok(out)
+}
+
+/// Decode and strictly validate a neighborhood artifact.
+///
+/// Reconstructs the canonical neighborhood from source bytes and verifies every
+/// serialized address exactly matches the reconstructed canonical address.
+pub fn decode_neighborhood(bytes: &[u8]) -> Result<Neighborhood, ArtifactError> {
+    let payload = verified_payload(bytes, NEIGHBORHOOD_MAGIC_V1)?;
+    let mut r = Reader {
+        bytes: payload,
+        pos: 8,
+    };
+    let scheme = r.scheme_payload()?;
+    let count = r.count()?;
+    let mut rows = Vec::with_capacity(count);
+    let mut stored = Vec::with_capacity(count);
+    let mut previous: Option<Vec<u8>> = None;
+    for _ in 0..count {
+        let content = r.bytes_vec()?;
+        if previous
+            .as_ref()
+            .is_some_and(|prev| prev.as_slice() >= content.as_slice())
+        {
+            return Err(ArtifactError::InvalidNeighborhood(
+                "neighborhood rows are not in strict canonical byte order",
+            ));
+        }
+        let identifier = match r.u8()? {
+            0 => None,
+            1 => Some(r.bytes_vec()?),
+            tag => {
+                return Err(ArtifactError::UnsupportedTag {
+                    what: "neighborhood identifier",
+                    tag,
+                });
+            }
+        };
+        let atom_count = r.count()?;
+        if atom_count == 0 {
+            return Err(ArtifactError::InvalidNeighborhood(
+                "neighborhood addresses must be nonempty",
+            ));
+        }
+        let mut atoms = Vec::with_capacity(atom_count);
+        for _ in 0..atom_count {
+            let atom = r.u32()?;
+            if atom >= scheme.capacity {
+                return Err(ArtifactError::InvalidNeighborhood(
+                    "neighborhood address atom outside scheme capacity",
+                ));
+            }
+            atoms.push(AtomId(atom));
+        }
+        rows.push(NeighborhoodRow {
+            bytes: content,
+            identifier,
+        });
+        stored.push(atoms);
+        previous = rows.last().map(|row| row.bytes.clone());
+    }
+    r.finish()?;
+
+    let reconstructed = Neighborhood::from_rows(scheme, rows).map_err(|e| {
+        ArtifactError::InvalidNeighborhood(match &e {
+            crate::neighborhood::NeighborhoodError::InvalidState(m) => m,
+            _ => "neighborhood rows fail canonical reconstruction",
+        })
+    })?;
+    for (i, entry) in reconstructed.entries().enumerate() {
+        if entry.address().atoms() != stored[i].as_slice() {
+            return Err(ArtifactError::InvalidNeighborhood(
+                "serialized address is not the canonical shortest unique address",
+            ));
+        }
+    }
+    Ok(reconstructed)
 }
 
 fn validate_prior(prior: &PriorArtifact) -> Result<(), ArtifactError> {

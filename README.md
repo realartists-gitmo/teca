@@ -30,3 +30,30 @@ let prefix: Vec<_> = scheme.scheme.address(input).take(8).collect();
 ```
 
 The offline static cooker is exposed as `teca::cook::cook_static`; the exact expected-cost solver remains available as a library component for small research priors only.
+
+## Neighborhoods
+
+The raw TECA stream is stateless: every call derives the same sequence of `AtomId`s from the same bytes. What makes addresses short and stable is a *neighborhood* — a collection of contents whose canonical addresses are the shortest nonempty prefixes of their own TECA streams that are unique among the members. Uniqueness is therefore relative to a neighborhood, not to the stream alone.
+
+```rust
+use teca::Neighborhood;
+
+let mut neighborhood = Neighborhood::canonical();
+
+let a = neighborhood.insert(b"alpha".to_vec())?;
+let b = neighborhood.insert_with_identifier(
+    b"beta".to_vec(),
+    b"database-row-42".to_vec(),
+)?;
+
+let entry = neighborhood.get_by_identifier(b"database-row-42").unwrap();
+let resolved = neighborhood.resolve(entry.address())?;
+```
+
+- Raw TECA streams are stateless; only the neighborhood decides how many atoms make an address unambiguous.
+- Addresses may lengthen when colliding content is added: inserting content whose stream shares the existing address of another member extends the older member to a longer unique prefix.
+- Addresses may also shorten when content is removed: `remove` restores the shortest possible prefixes for the survivors.
+- `resolve` accepts any current unambiguous TECA prefix of a member, so longer historical addresses keep resolving after a shortening.
+- The source bytes must be retained, because TECA may need to extend an address later when colliding content arrives; neighborhoods never store historical address aliases.
+
+The neighborhood can be round-tripped through the artifact API (`encode_neighborhood`/`decode_neighborhood`), which yields identical bytes for the same contents and identifiers regardless of insertion order or mutation history.
